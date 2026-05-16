@@ -17,9 +17,20 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from eero.client import EeroClient
-from eero.exceptions import EeroAPIException, EeroAuthenticationException
+from eero.exceptions import (
+    EeroAPIException,
+    EeroAuthenticationException,
+    EeroException,
+)
 
 DEFAULT_SESSION_PATH = Path.home() / ".config" / "eero" / "session.json"
+
+
+def _compile_pattern(pattern: str) -> re.Pattern[str]:
+    try:
+        return re.compile(pattern, re.IGNORECASE)
+    except re.error as e:
+        raise SystemExit(f"invalid regex {pattern!r}: {e}")
 
 
 def _ensure_session_dir(path: Path) -> None:
@@ -59,21 +70,36 @@ def _extract_networks(networks_resp: dict) -> list[dict]:
     return []
 
 
-async def _resolve_network_id(client: EeroClient) -> str:
+def _network_id_of(n: dict) -> str | None:
+    nid = n.get("id")
+    if nid is None and n.get("url"):
+        nid = n["url"].rstrip("/").rsplit("/", 1)[-1]
+    return str(nid) if nid is not None else None
+
+
+async def _resolve_network_id(client: EeroClient, requested: str | None = None, *, destructive: bool = False) -> str:
     networks_resp = await client.get_networks()
     networks = _extract_networks(networks_resp)
     if not networks:
         raise SystemExit("No networks found on this eero account.")
+    if requested:
+        for n in networks:
+            if _network_id_of(n) == str(requested):
+                return str(requested)
+        names = ", ".join(f"{n.get('name')}={_network_id_of(n)}" for n in networks)
+        raise SystemExit(f"--network-id {requested} not in account. Visible: {names}")
     if len(networks) > 1:
-        names = ", ".join(str(n.get("name", "?")) for n in networks)
+        names = ", ".join(f"{n.get('name')}={_network_id_of(n)}" for n in networks)
+        if destructive:
+            raise SystemExit(
+                f"account has {len(networks)} networks ({names}); "
+                "pass --network-id <id> to choose explicitly for destructive commands"
+            )
         print(f"warning: account has {len(networks)} networks ({names}); using first", file=sys.stderr)
-    n = networks[0]
-    nid = n.get("id")
-    if nid is None and n.get("url"):
-        nid = n["url"].rstrip("/").rsplit("/", 1)[-1]
+    nid = _network_id_of(networks[0])
     if nid is None:
-        raise SystemExit(f"Could not extract network id from: {n}")
-    return str(nid)
+        raise SystemExit(f"Could not extract network id from: {networks[0]}")
+    return nid
 
 
 def _fmt_last_active(value: Any) -> str:
@@ -159,9 +185,11 @@ def _print_device_table(devices: Iterable[dict[str, Any]]) -> None:
 
 async def _list_devices(args: argparse.Namespace) -> int:
     async with _client(args) as client:
-        nid = await _resolve_network_id(client)
+        nid = await _resolve_network_id(client, args.network_id)
         resp = await client.get_devices(network_id=nid)
         devices = resp.get("data", []) if isinstance(resp, dict) else resp
+        if args.filter:
+            _compile_pattern(args.filter)  # surface regex errors early
         filtered = _filter_devices(
             devices,
             name_regex=args.filter,
@@ -178,7 +206,7 @@ async def _block(args: argparse.Namespace) -> int:
     refuse to give the MAC an IP/SSID auth on next attempt. Reverse with
     --unblock."""
     async with _client(args) as client:
-        nid = await _resolve_network_id(client)
+        nid = await _resolve_network_id(client, args.network_id, destructive=True)
         resp = await client.get_devices(network_id=nid)
         devices = resp.get("data", []) if isinstance(resp, dict) else resp
         target = args.device.lower()
@@ -194,7 +222,10 @@ async def _block(args: argparse.Namespace) -> int:
         if not match:
             print(f"No device matches '{args.device}'", file=sys.stderr)
             return 1
-        did = _device_id_from_url(match["url"])
+        did = _device_id_from_url(match.get("url", ""))
+        if not did:
+            print(f"matched {_device_label(match)} but device has no URL/id; cannot mutate", file=sys.stderr)
+            return 1
         try:
             await client.block_device(device_id=did, blocked=not args.unblock, network_id=nid)
         except EeroAPIException as e:
@@ -206,35 +237,43 @@ async def _block(args: argparse.Namespace) -> int:
 
 
 async def _block_cleanup(args: argparse.Namespace) -> int:
-    """Bulk-block matching devices. Defaults to offline-only since blocking an
-    online device boots it immediately, which is usually surprising."""
+    """Bulk-block (or --unblock) matching devices. Defaults to offline-only
+    since blocking an online device boots it immediately, which is usually
+    surprising. When --unblock is set, selects currently-blocked devices."""
     async with _client(args) as client:
-        nid = await _resolve_network_id(client)
+        nid = await _resolve_network_id(client, args.network_id, destructive=True)
         resp = await client.get_devices(network_id=nid)
         devices = resp.get("data", []) if isinstance(resp, dict) else resp
-        pat = re.compile(args.pattern, re.IGNORECASE)
+        pat = _compile_pattern(args.pattern)
+        # For --unblock we want already-blocked devices; for block we want unblocked ones
+        target_blocked = bool(args.unblock)
         candidates = [
             d for d in devices
             if (pat.search(d.get("nickname") or "") or pat.search(d.get("hostname") or ""))
             and (args.include_online or not d.get("connected"))
-            and not d.get("blacklisted")
+            and bool(d.get("blacklisted")) == target_blocked
         ]
         if not candidates:
-            print(f"No new devices match /{args.pattern}/ (already-blocked + online filtered out unless --include-online)")
+            state = "already-blocked" if args.unblock else "unblocked"
+            print(f"No {state} devices match /{args.pattern}/ (online filtered out unless --include-online)")
             return 0
         verb = "unblock" if args.unblock else "block"
         print(f"Will {verb} {len(candidates)} device(s):\n")
         _print_device_table(candidates)
         if not args.yes:
             print()
-            reply = input(f"Proceed? [y/N] ").strip().lower()
+            reply = input("Proceed? [y/N] ").strip().lower()
             if reply not in ("y", "yes"):
                 print("aborted")
                 return 0
         ok = 0
         failed = 0
         for d in candidates:
-            did = _device_id_from_url(d["url"])
+            did = _device_id_from_url(d.get("url", ""))
+            if not did:
+                print(f"  fail: {_device_label(d)} {d.get('mac')} -> no device URL")
+                failed += 1
+                continue
             try:
                 await client.block_device(device_id=did, blocked=not args.unblock, network_id=nid)
                 ok += 1
@@ -247,7 +286,7 @@ async def _block_cleanup(args: argparse.Namespace) -> int:
 
 async def _delete_one(args: argparse.Namespace) -> int:
     async with _client(args) as client:
-        nid = await _resolve_network_id(client)
+        nid = await _resolve_network_id(client, args.network_id, destructive=True)
         resp = await client.get_devices(network_id=nid)
         devices = resp.get("data", []) if isinstance(resp, dict) else resp
         target = args.device.lower()
@@ -271,7 +310,10 @@ async def _delete_one(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
-        did = _device_id_from_url(match["url"])
+        did = _device_id_from_url(match.get("url", ""))
+        if not did:
+            print(f"matched {_device_label(match)} but device has no URL/id; cannot mutate", file=sys.stderr)
+            return 1
         try:
             await _forget_device(client, nid, did)
         except EeroAPIException as e:
@@ -283,10 +325,10 @@ async def _delete_one(args: argparse.Namespace) -> int:
 
 async def _cleanup(args: argparse.Namespace) -> int:
     async with _client(args) as client:
-        nid = await _resolve_network_id(client)
+        nid = await _resolve_network_id(client, args.network_id, destructive=True)
         resp = await client.get_devices(network_id=nid)
         devices = resp.get("data", []) if isinstance(resp, dict) else resp
-        pat = re.compile(args.pattern, re.IGNORECASE)
+        pat = _compile_pattern(args.pattern)
         candidates = [
             d for d in devices
             if (pat.search(d.get("nickname") or "") or pat.search(d.get("hostname") or ""))
@@ -306,9 +348,13 @@ async def _cleanup(args: argparse.Namespace) -> int:
         ok = 0
         failed = 0
         for d in candidates:
-            did = _device_id_from_url(d["url"])
+            did = _device_id_from_url(d.get("url", ""))
             label = _device_label(d)
             mac = d.get("mac")
+            if not did:
+                print(f"  failed: {label} {mac} -> no device URL")
+                failed += 1
+                continue
             if d.get("connected") and not args.force:
                 print(f"  skip (online): {label} {mac}")
                 continue
@@ -336,13 +382,26 @@ async def _auth(args: argparse.Namespace) -> int:
     ) as client:
         if args.code and not args.identifier:
             # verify-only path
-            await client.verify(args.code)
+            ok = await client.verify(args.code)
+            if not ok:
+                print("verify failed: eero rejected the code", file=sys.stderr)
+                return 1
         else:
             identifier = args.identifier or input("eero login (phone or email): ").strip()
-            await client.login(identifier)
+            login_ok = await client.login(identifier)
+            if not login_ok:
+                print(
+                    f"login request failed for {identifier} (no user_token in response). "
+                    "Double-check the identifier.",
+                    file=sys.stderr,
+                )
+                return 1
             print(f"login request sent to {identifier}.")
             if args.code:
-                await client.verify(args.code)
+                ok = await client.verify(args.code)
+                if not ok:
+                    print("verify failed: eero rejected the code", file=sys.stderr)
+                    return 1
             else:
                 # WORKAROUND: eero-api FileStorage auto-clears any session whose
                 # session_expiry is None when loading (auth_storage.py line ~136).
@@ -393,6 +452,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=DEFAULT_SESSION_PATH,
         help=f"Session JSON file (default: {DEFAULT_SESSION_PATH})",
+    )
+    p.add_argument(
+        "--network-id",
+        default=None,
+        help="Eero network id (required for destructive commands on multi-network accounts; ignored otherwise).",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -458,6 +522,15 @@ def main(argv: list[str] | None = None) -> int:
     except EeroAuthenticationException as e:
         print(f"auth error: {e}\n(run `eero auth` to sign in)", file=sys.stderr)
         return 1
+    except EeroAPIException as e:
+        print(f"eero API error: {e}", file=sys.stderr)
+        return 3
+    except EeroException as e:
+        print(f"eero client error: {e}", file=sys.stderr)
+        return 3
+    except OSError as e:
+        print(f"network/file error: {e}", file=sys.stderr)
+        return 4
 
 
 if __name__ == "__main__":
