@@ -24,8 +24,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/solomonneas/eero-cli"
-Issues = "https://github.com/solomonneas/eero-cli/issues"
+Homepage = "https://github.com/lidless-labs/eero-cli"
+Issues = "https://github.com/lidless-labs/eero-cli/issues"
 
 [project.scripts]
 eero = "eero_cli.cli:main"
