@@ -7,9 +7,9 @@
 <p align="center"><strong>Tiny terminal CLI for managing devices on an eero mesh network from a real shell.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/python-3.12+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.12+">
-  <img src="https://img.shields.io/badge/version-0.1.0-blue?style=for-the-badge" alt="version 0.1.0">
-  <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="license MIT">
+  <img src="https://shieldcn.dev/badge/python-3.12+-3776AB.svg?logo=python&logoColor=white" alt="Python 3.12+">
+  <img src="https://shieldcn.dev/badge/version-0.1.0-blue.svg" alt="version 0.1.0">
+  <img src="https://shieldcn.dev/badge/license-MIT-green.svg" alt="license MIT">
 </p>
 
 Wraps [`eero-api`](https://github.com/fulviofreitas/eero-api) (the most actively maintained reverse-engineered Python client as of May 2026) and adds:
