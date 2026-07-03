@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/eero-cli-banner.jpg" alt="eero-cli banner" width="900">
+  <img src="docs/assets/eero-cli-social-preview.jpg" alt="eero-cli social preview" width="900">
 </p>
 
 <h1 align="center">eero-cli</h1>
@@ -7,17 +7,23 @@
 <p align="center"><strong>Tiny terminal CLI for managing devices on an eero mesh network from a real shell.</strong></p>
 
 <p align="center">
+  <a href="https://lidless.dev/eero-cli"><strong>Website</strong></a>
+</p>
+
+<p align="center">
   <img src="https://shieldcn.dev/badge/python-3.12+-3776AB.svg?logo=python&logoColor=white" alt="Python 3.12+">
-  <img src="https://shieldcn.dev/badge/version-0.1.0-blue.svg" alt="version 0.1.0">
+  <img src="https://shieldcn.dev/badge/eero--cli-0.1.0-blue.svg" alt="eero-cli 0.1.0">
   <img src="https://shieldcn.dev/badge/license-MIT-green.svg" alt="license MIT">
 </p>
+
+## What it does
 
 Wraps [`eero-api`](https://github.com/fulviofreitas/eero-api) (the most actively maintained reverse-engineered Python client as of May 2026) and adds:
 
 - A two-step, **non-interactive** SMS auth flow that survives across separate shell invocations
 - Filtered device listing (regex + MAC prefix + online/offline)
 - Single and bulk device blocking
-- An honest writeup, in this README, of what eero's API will and won't let you do — saving you the half-day I spent figuring it out
+- An honest writeup, in this README, of what eero's API will and won't let you do, so you do not spend half a day chasing unsupported calls
 
 ## Install
 
@@ -29,9 +35,19 @@ pipx install .
 
 Requires Python 3.12+ (inherited from `eero-api`).
 
+## Quickstart
+
+```bash
+eero auth +15551234567
+eero auth --code 123456
+eero devices
+eero devices --offline
+eero block-cleanup '^bc24'
+```
+
 ## First-time auth
 
-The eero API uses a two-step SMS/email login. Both halves are non-interactive so they work in any wrapper that can't drive `input()` (Claude Code's `!` shell, scripted setup, etc.):
+The eero API uses a two-step SMS/email login. Both halves are non-interactive so they work in any wrapper that can't drive `input()`:
 
 ```bash
 # Step 1: trigger the SMS / email
@@ -46,7 +62,7 @@ Session token is written to `~/.config/eero/session.json` (mode 0600). Re-run `e
 
 ### Why two steps
 
-The underlying `eero-api` library auto-clears any persisted session whose `session_expiry` is None when it loads — but `login()` legitimately leaves expiry None until `verify()` runs. Single-process auth works fine; cross-process auth would lose the partial state on read. `eero-cli` works around this by stamping a 30-minute placeholder expiry between the two calls.
+The underlying `eero-api` library auto-clears any persisted session whose `session_expiry` is None when it loads, but `login()` legitimately leaves expiry None until `verify()` runs. Single-process auth works fine; cross-process auth would lose the partial state on read. `eero-cli` works around this by stamping a 30-minute placeholder expiry between the two calls.
 
 ## Commands
 
@@ -75,7 +91,7 @@ The eero REST and GraphQL APIs **do not expose any mutating operation on offline
 - `block_device` against an offline device returns `200` but does not flip the `blacklisted`, `paused`, `dropped`, or any other state field
 - The eero web admin SPA (`insight.eero.com`) ships **215 GraphQL mutations**; none match `*Forget*`, `*Delete*Device*`, or `*Remove*Device*` (only `BlockDevicesNetwork`, `EditDeviceNickname`, `EditDevicePaused`, `ToggleEeroBuiltinOnDevice`, `UnblockDevicesNetwork`, `UpdateDeviceSecondaryWan`)
 
-The mobile app's "Forget Device" button must use either a private/internal channel or be local-only display state. No public reverse-engineered library — [`343max/eero-client`](https://github.com/343max/eero-client), [`fulviofreitas/eero-api`](https://github.com/fulviofreitas/eero-api), [`schmittx/home-assistant-eero`](https://github.com/schmittx/home-assistant-eero), or [`erikh/eero`](https://github.com/erikh/eero) — exposes device removal either.
+The mobile app's "Forget Device" button must use either a private/internal channel or be local-only display state. None of the public reverse-engineered libraries expose device removal: [`343max/eero-client`](https://github.com/343max/eero-client), [`fulviofreitas/eero-api`](https://github.com/fulviofreitas/eero-api), [`schmittx/home-assistant-eero`](https://github.com/schmittx/home-assistant-eero), or [`erikh/eero`](https://github.com/erikh/eero).
 
 **If you need to actually delete an offline device:**
 
@@ -84,7 +100,7 @@ The mobile app's "Forget Device" button must use either a private/internal chann
 
 ## Underlying library
 
-[`eero-api`](https://github.com/fulviofreitas/eero-api) by Fulvio Freitas — modern async client, version 4.1.3 at time of writing. Picked over the older `343max/eero-client` (last code push Feb 2024) because it's actively maintained, ships proper file-based credential storage, and has a clean async surface.
+[`eero-api`](https://github.com/fulviofreitas/eero-api) by Fulvio Freitas is a modern async client, version 4.1.3 at time of writing. Picked over the older `343max/eero-client` (last code push Feb 2024) because it's actively maintained, ships proper file-based credential storage, and has a clean async surface.
 
 ## License
 
