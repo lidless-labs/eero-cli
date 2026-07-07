@@ -8,14 +8,13 @@ name = "eero-cli"
 version = "0.1.0"
 description = "Tiny CLI for managing eero mesh devices (auth, list, forget, bulk cleanup)"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
 requires-python = ">=3.12"
 authors = [{ name = "Solomon Neas", email = "me@solomonneas.dev" }]
 keywords = ["eero", "mesh", "wifi", "cli", "network"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.12",
     "Topic :: System :: Networking",
 ]
@@ -26,6 +25,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/lidless-labs/eero-cli"
 Issues = "https://github.com/lidless-labs/eero-cli/issues"
+Source = "https://github.com/lidless-labs/eero-cli"
 
 [project.scripts]
 eero = "eero_cli.cli:main"

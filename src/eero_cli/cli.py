@@ -1,9 +1,8 @@
 """eero-cli command-line interface.
 
 Wraps fulviofreitas/eero-api with two things it doesn't ship:
-  1. A device-forget call (DELETE /networks/<nid>/devices/<did>) — eero's app
-     uses this for the "Forget Device" button. Only works on offline devices.
-  2. A bulk cleanup command for clearing stale entries by hostname/MAC pattern.
+  1. A two-step auth flow that works across separate shell invocations.
+  2. Device listing and block-based cleanup for stale entries by hostname/MAC pattern.
 """
 from __future__ import annotations
 
