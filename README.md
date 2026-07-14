@@ -23,6 +23,7 @@ Wraps [`eero-api`](https://github.com/fulviofreitas/eero-api) (the most actively
 - A two-step, **non-interactive** SMS auth flow that survives across separate shell invocations
 - Filtered device listing (regex + MAC prefix + online/offline)
 - Single and bulk device blocking
+- Profile management: create profiles, assign devices, set bedtime schedules, block apps
 - An honest writeup, in this README, of what eero's API will and won't let you do, so you do not spend half a day chasing unsupported calls
 
 ## Install
@@ -77,9 +78,20 @@ eero block <mac-or-id>            # block a device (works on online devices)
 eero block <mac-or-id> --unblock  # reverse it
 eero block-cleanup '^bc24'        # bulk-block matching offline devices
 eero block-cleanup '^bc24' -y     # skip confirmation prompt
+
+eero profiles --devices           # list profiles and assigned devices
+eero profile-create 'Alistair TV' # create a dedicated profile
+eero profile-assign 'Alistair TV' 'Samsung' -y
+eero profile-schedule 'Alistair TV' --start 21:00 --end 08:00 --days all -y
+eero profile-schedule-clear 'Alistair TV' -y
+eero profile-block-apps Alistair youtube --append -y
 ```
 
 `block-cleanup` defaults to offline-only and skips already-blocked devices. Pass `--include-online` to widen the net.
+
+Profile schedules are profile-level in eero, not per-device. To restrict a single
+device without affecting a profile's other devices, create a dedicated profile for
+that device and assign only it.
 
 ## What this CLI cannot do (and why)
 
