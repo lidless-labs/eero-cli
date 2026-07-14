@@ -57,13 +57,6 @@ def _device_id_from_url(device_url: str) -> str:
     return device_url.rstrip("/").rsplit("/", 1)[-1]
 
 
-def _api_path(url: str) -> str:
-    path = url.lstrip("/")
-    if path.startswith("2.2/"):
-        return path[4:]
-    return path
-
-
 def _profile_id_from_url(profile_url: str) -> str:
     return profile_url.rstrip("/").rsplit("/", 1)[-1]
 
@@ -359,43 +352,28 @@ async def _get_profile_data(client: EeroClient, network_id: str, profile_id: str
     return data if isinstance(data, dict) else {}
 
 
-async def _delete_profile_schedules(client: EeroClient, network_id: str, profile_id: str) -> int:
-    profile = await _get_profile_data(client, network_id, profile_id)
-    schedules = profile.get("schedule", [])
-    if not isinstance(schedules, list):
-        return 0
-    schedules_api = client._api.schedule
-    auth_token = await schedules_api._auth_api.get_auth_token()
-    if not auth_token:
-        raise EeroAuthenticationException("Not authenticated")
-    deleted = 0
-    for schedule in schedules:
-        url = schedule.get("url") if isinstance(schedule, dict) else None
-        if not url:
-            continue
-        await schedules_api.delete(_api_path(url), auth_token=auth_token)
-        deleted += 1
-    client._invalidate_profile_cache(network_id, profile_id)
-    return deleted
+def _count_schedules(profile_data: dict[str, Any]) -> int:
+    """Number of schedule blocks on a profile (the eero `schedule` array)."""
+    schedules = profile_data.get("schedule")
+    return len(schedules) if isinstance(schedules, list) else 0
 
 
-async def _create_profile_schedule(
-    client: EeroClient,
-    network_id: str,
-    profile_id: str,
-    block: dict[str, Any],
-) -> dict[str, Any]:
-    schedules_api = client._api.schedule
-    auth_token = await schedules_api._auth_api.get_auth_token()
-    if not auth_token:
-        raise EeroAuthenticationException("Not authenticated")
-    response = await schedules_api.post(
-        f"networks/{network_id}/profiles/{profile_id}/schedules",
-        auth_token=auth_token,
-        json=block,
-    )
-    client._invalidate_profile_cache(network_id, profile_id)
-    return response
+def _bedtime_block(days: list[str], start: str, end: str) -> dict[str, Any]:
+    """Build one bedtime time-block for the eero schedule API.
+
+    Day names are lowercased to match the format the maintained eero-api uses.
+    The block replaces the whole profile schedule via `client.set_profile_schedule`
+    (PUT networks/<nid>/profiles/<pid> with `{"schedule": [block]}`). The previous
+    code POSTed capitalized day names with `name`/`enabled` fields to a
+    `/schedules` subcollection, which matches neither the endpoint nor the block
+    shape of the reference client.
+    """
+    return {
+        "days": [d.lower() for d in days],
+        "start": start,
+        "end": end,
+        "type": "bedtime",
+    }
 
 
 async def _list_devices(args: argparse.Namespace) -> int:
@@ -663,17 +641,17 @@ async def _schedule_profile(args: argparse.Namespace) -> int:
         if not profile:
             return 1
         profile_id = str(profile.get("id") or _profile_id_from_url(profile.get("url", "")))
-        block = {"name": "Bedtime", "enabled": True, "days": days, "start": start, "end": end}
+        block = _bedtime_block(days, start, end)
         print(f"Will set bedtime block on {_profile_label(profile)}: {start}-{end} on {', '.join(days)}")
         if not args.yes:
             reply = input("Proceed? [y/N] ").strip().lower()
             if reply not in ("y", "yes"):
                 print("aborted")
                 return 0
-        deleted = await _delete_profile_schedules(client, nid, profile_id)
-        await _create_profile_schedule(client, nid, profile_id, block)
-        if deleted:
-            print(f"replaced {deleted} existing schedule(s)")
+        existing = _count_schedules(await _get_profile_data(client, nid, profile_id))
+        await client.set_profile_schedule(profile_id=profile_id, time_blocks=[block], network_id=nid)
+        if existing:
+            print(f"replaced {existing} existing schedule(s)")
         print(f"schedule updated for {_profile_label(profile)}")
     return 0
 
@@ -692,8 +670,9 @@ async def _clear_profile_schedule(args: argparse.Namespace) -> int:
             if reply not in ("y", "yes"):
                 print("aborted")
                 return 0
-        deleted = await _delete_profile_schedules(client, nid, profile_id)
-        print(f"schedule cleared for {_profile_label(profile)} ({deleted} deleted)")
+        cleared = _count_schedules(await _get_profile_data(client, nid, profile_id))
+        await client.clear_profile_schedule(profile_id=profile_id, network_id=nid)
+        print(f"schedule cleared for {_profile_label(profile)} ({cleared} removed)")
     return 0
 
 
