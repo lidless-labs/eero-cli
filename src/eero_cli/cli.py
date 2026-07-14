@@ -55,6 +55,31 @@ def _device_id_from_url(device_url: str) -> str:
     return device_url.rstrip("/").rsplit("/", 1)[-1]
 
 
+def _api_path(url: str) -> str:
+    path = url.lstrip("/")
+    if path.startswith("2.2/"):
+        return path[4:]
+    return path
+
+
+def _profile_id_from_url(profile_url: str) -> str:
+    return profile_url.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _extract_data_list(resp: Any, *keys: str) -> list[dict[str, Any]]:
+    data = resp.get("data", resp) if isinstance(resp, dict) else resp
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    if isinstance(data, dict):
+        for key in keys:
+            value = data.get(key)
+            if isinstance(value, list):
+                return [x for x in value if isinstance(x, dict)]
+            if isinstance(value, dict) and isinstance(value.get("data"), list):
+                return [x for x in value["data"] if isinstance(x, dict)]
+    return []
+
+
 def _extract_networks(networks_resp: dict) -> list[dict]:
     """get_networks() returns {data: {networks: [...]}}; flatten that here."""
     data = networks_resp.get("data", {})
@@ -137,9 +162,62 @@ def _device_label(device: dict[str, Any]) -> str:
     )
 
 
+def _profile_label(profile: dict[str, Any]) -> str:
+    return (
+        profile.get("name")
+        or profile.get("nickname")
+        or profile.get("profile_name")
+        or profile.get("url")
+        or "(unnamed)"
+    )
+
+
+def _norm(value: Any) -> str:
+    return str(value or "").lower().strip()
+
+
+def _compact_mac(value: Any) -> str:
+    return _norm(value).replace(":", "").replace("-", "")
+
+
+def _device_search_text(device: dict[str, Any]) -> str:
+    did = _device_id_from_url(device.get("url", ""))
+    fields = [
+        _device_label(device),
+        device.get("nickname"),
+        device.get("hostname"),
+        device.get("manufacturer"),
+        device.get("mac"),
+        _compact_mac(device.get("mac")),
+        device.get("ip"),
+        device.get("url"),
+        did,
+    ]
+    return " ".join(_norm(x) for x in fields if x)
+
+
+def _profile_search_text(profile: dict[str, Any]) -> str:
+    pid = _profile_id_from_url(profile.get("url", ""))
+    fields = [
+        _profile_label(profile),
+        profile.get("name"),
+        profile.get("nickname"),
+        profile.get("url"),
+        profile.get("id"),
+        pid,
+    ]
+    return " ".join(_norm(x) for x in fields if x)
+
+
+def _matches_terms(text: str, query: str) -> bool:
+    terms = [_norm(t) for t in re.split(r"\s+", query) if t.strip()]
+    return all(t in text for t in terms)
+
+
 def _filter_devices(
     devices: list[dict[str, Any]],
     name_regex: str | None = None,
+    search: str | None = None,
     mac_prefix: str | None = None,
     only_offline: bool = False,
     only_online: bool = False,
@@ -147,11 +225,9 @@ def _filter_devices(
     result = devices
     if name_regex:
         pat = re.compile(name_regex, re.IGNORECASE)
-        result = [
-            d for d in result
-            if pat.search(d.get("nickname") or "")
-            or pat.search(d.get("hostname") or "")
-        ]
+        result = [d for d in result if pat.search(_device_search_text(d))]
+    if search:
+        result = [d for d in result if _matches_terms(_device_search_text(d), search)]
     if mac_prefix:
         norm = mac_prefix.lower().replace(":", "").replace("-", "")
         result = [
@@ -163,6 +239,44 @@ def _filter_devices(
     if only_online:
         result = [d for d in result if d.get("connected")]
     return result
+
+
+def _find_one_device(devices: list[dict[str, Any]], query: str) -> dict[str, Any] | None:
+    target = _norm(query)
+    norm_target = _compact_mac(query)
+    exact = []
+    for d in devices:
+        did = _device_id_from_url(d.get("url", ""))
+        mac = _norm(d.get("mac"))
+        if target in {did.lower(), mac, _norm(_device_label(d))} or norm_target == _compact_mac(mac):
+            exact.append(d)
+    matches = exact or [d for d in devices if _matches_terms(_device_search_text(d), query)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        print(f"No device matches '{query}'", file=sys.stderr)
+        return None
+    print(f"'{query}' matched {len(matches)} devices; narrow the search:", file=sys.stderr)
+    _print_device_table(matches)
+    return None
+
+
+def _find_one_profile(profiles: list[dict[str, Any]], query: str) -> dict[str, Any] | None:
+    target = _norm(query)
+    exact = []
+    for p in profiles:
+        pid = str(p.get("id") or _profile_id_from_url(p.get("url", ""))).lower()
+        if target in {pid, _norm(_profile_label(p))}:
+            exact.append(p)
+    matches = exact or [p for p in profiles if _matches_terms(_profile_search_text(p), query)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        print(f"No profile matches '{query}'", file=sys.stderr)
+        return None
+    print(f"'{query}' matched {len(matches)} profiles; narrow the search:", file=sys.stderr)
+    _print_profile_table(matches)
+    return None
 
 
 def _print_device_table(devices: Iterable[dict[str, Any]]) -> None:
@@ -183,16 +297,115 @@ def _print_device_table(devices: Iterable[dict[str, Any]]) -> None:
     print(f"\n{len(rows)} device(s)")
 
 
+def _print_profile_table(profiles: Iterable[dict[str, Any]]) -> None:
+    rows = list(profiles)
+    if not rows:
+        print("(no profiles match)")
+        return
+    header = f"{'ID':<10} {'DEVICES':<7} {'NAME'}"
+    print(header)
+    print("-" * len(header))
+    for p in rows:
+        pid = str(p.get("id") or _profile_id_from_url(p.get("url", "")) or "?")
+        devices = p.get("devices") if isinstance(p.get("devices"), list) else []
+        print(f"{pid:<10} {len(devices):<7} {_profile_label(p)}")
+    print(f"\n{len(rows)} profile(s)")
+
+
+def _device_urls(profile_resp: Any) -> list[str]:
+    data = profile_resp.get("data", profile_resp) if isinstance(profile_resp, dict) else profile_resp
+    devices = data.get("devices", []) if isinstance(data, dict) else []
+    urls = []
+    seen = set()
+    for d in devices if isinstance(devices, list) else []:
+        if isinstance(d, dict) and d.get("url") and d["url"] not in seen:
+            urls.append(d["url"])
+            seen.add(d["url"])
+    return urls
+
+
+def _parse_days(days: str) -> list[str]:
+    groups = {
+        "all": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+        "weekdays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+        "weekends": ["Saturday", "Sunday"],
+        "weekend": ["Saturday", "Sunday"],
+    }
+    key = days.lower().strip()
+    if key in groups:
+        return groups[key]
+    by_lower = {d.lower(): d for d in groups["all"]}
+    parsed = [d.strip().lower() for d in days.split(",") if d.strip()]
+    bad = [d for d in parsed if d not in by_lower]
+    if bad:
+        raise SystemExit(f"invalid day(s): {', '.join(bad)}")
+    return [by_lower[d] for d in parsed]
+
+
+def _validate_time(value: str) -> str:
+    try:
+        datetime.strptime(value, "%H:%M")
+    except ValueError:
+        raise SystemExit(f"invalid time {value!r}; use 24-hour HH:MM")
+    return value
+
+
+async def _get_profile_data(client: EeroClient, network_id: str, profile_id: str) -> dict[str, Any]:
+    resp = await client.get_profile(profile_id=profile_id, network_id=network_id, refresh_cache=True)
+    data = resp.get("data", {}) if isinstance(resp, dict) else {}
+    return data if isinstance(data, dict) else {}
+
+
+async def _delete_profile_schedules(client: EeroClient, network_id: str, profile_id: str) -> int:
+    profile = await _get_profile_data(client, network_id, profile_id)
+    schedules = profile.get("schedule", [])
+    if not isinstance(schedules, list):
+        return 0
+    schedules_api = client._api.schedule
+    auth_token = await schedules_api._auth_api.get_auth_token()
+    if not auth_token:
+        raise EeroAuthenticationException("Not authenticated")
+    deleted = 0
+    for schedule in schedules:
+        url = schedule.get("url") if isinstance(schedule, dict) else None
+        if not url:
+            continue
+        await schedules_api.delete(_api_path(url), auth_token=auth_token)
+        deleted += 1
+    client._invalidate_profile_cache(network_id, profile_id)
+    return deleted
+
+
+async def _create_profile_schedule(
+    client: EeroClient,
+    network_id: str,
+    profile_id: str,
+    block: dict[str, Any],
+) -> dict[str, Any]:
+    schedules_api = client._api.schedule
+    auth_token = await schedules_api._auth_api.get_auth_token()
+    if not auth_token:
+        raise EeroAuthenticationException("Not authenticated")
+    response = await schedules_api.post(
+        f"networks/{network_id}/profiles/{profile_id}/schedules",
+        auth_token=auth_token,
+        json=block,
+    )
+    client._invalidate_profile_cache(network_id, profile_id)
+    return response
+
+
 async def _list_devices(args: argparse.Namespace) -> int:
     async with _client(args) as client:
         nid = await _resolve_network_id(client, args.network_id)
         resp = await client.get_devices(network_id=nid)
-        devices = resp.get("data", []) if isinstance(resp, dict) else resp
+        devices = _extract_data_list(resp, "devices")
         if args.filter:
             _compile_pattern(args.filter)  # surface regex errors early
         filtered = _filter_devices(
             devices,
             name_regex=args.filter,
+            search=args.search,
             mac_prefix=args.mac,
             only_offline=args.offline,
             only_online=args.online,
@@ -208,19 +421,9 @@ async def _block(args: argparse.Namespace) -> int:
     async with _client(args) as client:
         nid = await _resolve_network_id(client, args.network_id, destructive=True)
         resp = await client.get_devices(network_id=nid)
-        devices = resp.get("data", []) if isinstance(resp, dict) else resp
-        target = args.device.lower()
-        norm_target = target.replace(":", "").replace("-", "")
-        match = None
-        for d in devices:
-            mac = (d.get("mac") or "").lower()
-            mac_norm = mac.replace(":", "").replace("-", "")
-            did = _device_id_from_url(d.get("url", ""))
-            if did == args.device or mac == target or mac_norm == norm_target:
-                match = d
-                break
+        devices = _extract_data_list(resp, "devices")
+        match = _find_one_device(devices, args.device)
         if not match:
-            print(f"No device matches '{args.device}'", file=sys.stderr)
             return 1
         did = _device_id_from_url(match.get("url", ""))
         if not did:
@@ -243,7 +446,7 @@ async def _block_cleanup(args: argparse.Namespace) -> int:
     async with _client(args) as client:
         nid = await _resolve_network_id(client, args.network_id, destructive=True)
         resp = await client.get_devices(network_id=nid)
-        devices = resp.get("data", []) if isinstance(resp, dict) else resp
+        devices = _extract_data_list(resp, "devices")
         pat = _compile_pattern(args.pattern)
         # For --unblock we want already-blocked devices; for block we want unblocked ones
         target_blocked = bool(args.unblock)
@@ -288,19 +491,9 @@ async def _delete_one(args: argparse.Namespace) -> int:
     async with _client(args) as client:
         nid = await _resolve_network_id(client, args.network_id, destructive=True)
         resp = await client.get_devices(network_id=nid)
-        devices = resp.get("data", []) if isinstance(resp, dict) else resp
-        target = args.device.lower()
-        norm_target = target.replace(":", "").replace("-", "")
-        match = None
-        for d in devices:
-            mac = (d.get("mac") or "").lower()
-            mac_norm = mac.replace(":", "").replace("-", "")
-            did = _device_id_from_url(d.get("url", ""))
-            if did == args.device or mac == target or mac_norm == norm_target:
-                match = d
-                break
+        devices = _extract_data_list(resp, "devices")
+        match = _find_one_device(devices, args.device)
         if not match:
-            print(f"No device matches '{args.device}' (try `eero devices` to see IDs/MACs)", file=sys.stderr)
             return 1
         if match.get("connected") and not args.force:
             print(
@@ -327,7 +520,7 @@ async def _cleanup(args: argparse.Namespace) -> int:
     async with _client(args) as client:
         nid = await _resolve_network_id(client, args.network_id, destructive=True)
         resp = await client.get_devices(network_id=nid)
-        devices = resp.get("data", []) if isinstance(resp, dict) else resp
+        devices = _extract_data_list(resp, "devices")
         pat = _compile_pattern(args.pattern)
         candidates = [
             d for d in devices
@@ -367,6 +560,167 @@ async def _cleanup(args: argparse.Namespace) -> int:
                 failed += 1
         print(f"\n{ok} forgotten, {failed} failed")
         return 0 if failed == 0 else 4
+
+
+async def _list_profiles(args: argparse.Namespace) -> int:
+    async with _client(args) as client:
+        nid = await _resolve_network_id(client, args.network_id)
+        resp = await client.get_profiles(network_id=nid, refresh_cache=True)
+        profiles = _extract_data_list(resp, "profiles")
+        if args.search:
+            profiles = [p for p in profiles if _matches_terms(_profile_search_text(p), args.search)]
+        _print_profile_table(profiles)
+        if args.devices:
+            for p in profiles:
+                pid = str(p.get("id") or _profile_id_from_url(p.get("url", "")))
+                detail = await client.get_profile_devices(profile_id=pid, network_id=nid)
+                devices = _extract_data_list(detail, "devices")
+                print(f"\n{_profile_label(p)}:")
+                _print_device_table(devices)
+    return 0
+
+
+async def _assign_profile_device(args: argparse.Namespace) -> int:
+    async with _client(args) as client:
+        nid = await _resolve_network_id(client, args.network_id, destructive=True)
+        profiles = _extract_data_list(await client.get_profiles(network_id=nid, refresh_cache=True), "profiles")
+        profile = _find_one_profile(profiles, args.profile)
+        if not profile:
+            return 1
+        profile_id = str(profile.get("id") or _profile_id_from_url(profile.get("url", "")))
+        devices = _extract_data_list(await client.get_devices(network_id=nid, refresh_cache=True), "devices")
+        matches = []
+        for query in args.devices:
+            match = _find_one_device(devices, query)
+            if not match:
+                return 1
+            matches.append(match)
+
+        existing = _device_urls(await client.get_profile_devices(profile_id=profile_id, network_id=nid))
+        urls = list(existing)
+        seen = set(existing)
+        changed = []
+        for device in matches:
+            url = device.get("url")
+            if not url:
+                print(f"matched {_device_label(device)} but device has no URL; cannot assign", file=sys.stderr)
+                return 1
+            if args.remove:
+                if url in seen:
+                    urls = [u for u in urls if u != url]
+                    seen.remove(url)
+                    changed.append(device)
+            elif url not in seen:
+                urls.append(url)
+                seen.add(url)
+                changed.append(device)
+
+        verb = "remove from" if args.remove else "assign to"
+        if not changed:
+            print(f"No changes needed for {_profile_label(profile)}")
+            return 0
+        print(f"Will {verb} profile {_profile_label(profile)}:")
+        _print_device_table(changed)
+        if not args.yes:
+            reply = input("Proceed? [y/N] ").strip().lower()
+            if reply not in ("y", "yes"):
+                print("aborted")
+                return 0
+
+        await client.set_profile_devices(profile_id=profile_id, device_urls=urls, network_id=nid)
+        print(f"updated {_profile_label(profile)}; {len(urls)} device(s) assigned")
+    return 0
+
+
+async def _create_profile(args: argparse.Namespace) -> int:
+    async with _client(args) as client:
+        nid = await _resolve_network_id(client, args.network_id, destructive=True)
+        print(f"Will create profile: {args.name}")
+        if not args.yes:
+            reply = input("Proceed? [y/N] ").strip().lower()
+            if reply not in ("y", "yes"):
+                print("aborted")
+                return 0
+        resp = await client.create_profile(name=args.name, network_id=nid)
+        data = resp.get("data", {}) if isinstance(resp, dict) else {}
+        created = data if isinstance(data, dict) else {}
+        pid = created.get("id") or _profile_id_from_url(created.get("url", ""))
+        print(f"created {_profile_label(created) if created else args.name} ({pid or 'unknown id'})")
+    return 0
+
+
+async def _schedule_profile(args: argparse.Namespace) -> int:
+    start = _validate_time(args.start)
+    end = _validate_time(args.end)
+    days = _parse_days(args.days)
+    async with _client(args) as client:
+        nid = await _resolve_network_id(client, args.network_id, destructive=True)
+        profiles = _extract_data_list(await client.get_profiles(network_id=nid, refresh_cache=True), "profiles")
+        profile = _find_one_profile(profiles, args.profile)
+        if not profile:
+            return 1
+        profile_id = str(profile.get("id") or _profile_id_from_url(profile.get("url", "")))
+        block = {"name": "Bedtime", "enabled": True, "days": days, "start": start, "end": end}
+        print(f"Will set bedtime block on {_profile_label(profile)}: {start}-{end} on {', '.join(days)}")
+        if not args.yes:
+            reply = input("Proceed? [y/N] ").strip().lower()
+            if reply not in ("y", "yes"):
+                print("aborted")
+                return 0
+        deleted = await _delete_profile_schedules(client, nid, profile_id)
+        await _create_profile_schedule(client, nid, profile_id, block)
+        if deleted:
+            print(f"replaced {deleted} existing schedule(s)")
+        print(f"schedule updated for {_profile_label(profile)}")
+    return 0
+
+
+async def _clear_profile_schedule(args: argparse.Namespace) -> int:
+    async with _client(args) as client:
+        nid = await _resolve_network_id(client, args.network_id, destructive=True)
+        profiles = _extract_data_list(await client.get_profiles(network_id=nid, refresh_cache=True), "profiles")
+        profile = _find_one_profile(profiles, args.profile)
+        if not profile:
+            return 1
+        profile_id = str(profile.get("id") or _profile_id_from_url(profile.get("url", "")))
+        print(f"Will clear schedule for {_profile_label(profile)}")
+        if not args.yes:
+            reply = input("Proceed? [y/N] ").strip().lower()
+            if reply not in ("y", "yes"):
+                print("aborted")
+                return 0
+        deleted = await _delete_profile_schedules(client, nid, profile_id)
+        print(f"schedule cleared for {_profile_label(profile)} ({deleted} deleted)")
+    return 0
+
+
+async def _block_profile_apps(args: argparse.Namespace) -> int:
+    apps = [a.strip().lower() for a in args.applications if a.strip()]
+    async with _client(args) as client:
+        nid = await _resolve_network_id(client, args.network_id, destructive=True)
+        profiles = _extract_data_list(await client.get_profiles(network_id=nid, refresh_cache=True), "profiles")
+        profile = _find_one_profile(profiles, args.profile)
+        if not profile:
+            return 1
+        profile_id = str(profile.get("id") or _profile_id_from_url(profile.get("url", "")))
+        current_resp = await client.get_blocked_applications(profile_id=profile_id, network_id=nid)
+        data = current_resp.get("data", {}) if isinstance(current_resp, dict) else {}
+        current = []
+        if isinstance(data, dict):
+            current = data.get("blocked_applications") or data.get("premium_dns", {}).get("blocked_applications") or []
+        current = [str(a).lower() for a in current] if isinstance(current, list) else []
+        final = apps
+        if args.append:
+            final = sorted(set(current) | set(apps))
+        print(f"Will set blocked apps for {_profile_label(profile)}: {', '.join(final) or '(none)'}")
+        if not args.yes:
+            reply = input("Proceed? [y/N] ").strip().lower()
+            if reply not in ("y", "yes"):
+                print("aborted")
+                return 0
+        await client.set_blocked_applications(profile_id=profile_id, applications=final, network_id=nid)
+        print(f"blocked applications updated for {_profile_label(profile)}")
+    return 0
 
 
 async def _auth(args: argparse.Namespace) -> int:
@@ -469,11 +823,53 @@ def _build_parser() -> argparse.ArgumentParser:
     pa.set_defaults(func=_auth)
 
     pd = sub.add_parser("devices", help="List devices on the network.")
-    pd.add_argument("--filter", help="Regex matched against nickname/hostname (case-insensitive).")
+    pd.add_argument("--filter", help="Regex matched against device name/host/manufacturer/MAC/IP/URL.")
+    pd.add_argument("--search", help="Plain-text terms matched across device name/host/manufacturer/MAC/IP/URL.")
     pd.add_argument("--mac", help="MAC prefix filter, e.g. 'BC:24:11' or 'bc2411'.")
     pd.add_argument("--offline", action="store_true", help="Only offline devices.")
     pd.add_argument("--online", action="store_true", help="Only online devices.")
     pd.set_defaults(func=_list_devices)
+
+    pp = sub.add_parser("profiles", help="List profiles and optional profile devices.")
+    pp.add_argument("--search", help="Plain-text terms matched against profile name/id/url.")
+    pp.add_argument("--devices", action="store_true", help="Also list devices assigned to each matching profile.")
+    pp.set_defaults(func=_list_profiles)
+
+    pc2 = sub.add_parser("profile-create", help="Create a new profile.")
+    pc2.add_argument("name", help="Profile name.")
+    pc2.add_argument("-y", "--yes", action="store_true", help="Skip confirmation.")
+    pc2.set_defaults(func=_create_profile)
+
+    pa2 = sub.add_parser("profile-assign", help="Assign matching device(s) to a profile.")
+    pa2.add_argument("profile", help="Profile name/id search, e.g. Johnny")
+    pa2.add_argument("devices", nargs="+", help="Device searches, e.g. 'Samsung' 'Johnny PC'")
+    pa2.add_argument("--remove", action="store_true", help="Remove matching device(s) from the profile instead.")
+    pa2.add_argument("-y", "--yes", action="store_true", help="Skip confirmation.")
+    pa2.set_defaults(func=_assign_profile_device)
+
+    ps = sub.add_parser("profile-schedule", help="Set a profile bedtime block schedule.")
+    ps.add_argument("profile", help="Profile name/id search.")
+    ps.add_argument("--start", required=True, help="Block start time, 24-hour HH:MM.")
+    ps.add_argument("--end", required=True, help="Block end time, 24-hour HH:MM.")
+    ps.add_argument(
+        "--days",
+        default="all",
+        help="all, weekdays, weekends, or comma-separated day names. Default: all.",
+    )
+    ps.add_argument("-y", "--yes", action="store_true", help="Skip confirmation.")
+    ps.set_defaults(func=_schedule_profile)
+
+    psc = sub.add_parser("profile-schedule-clear", help="Clear a profile schedule.")
+    psc.add_argument("profile", help="Profile name/id search.")
+    psc.add_argument("-y", "--yes", action="store_true", help="Skip confirmation.")
+    psc.set_defaults(func=_clear_profile_schedule)
+
+    pba = sub.add_parser("profile-block-apps", help="Set profile blocked applications, e.g. youtube.")
+    pba.add_argument("profile", help="Profile name/id search.")
+    pba.add_argument("applications", nargs="+", help="Application identifiers, e.g. youtube tiktok.")
+    pba.add_argument("--append", action="store_true", help="Append to existing blocked apps instead of replacing them.")
+    pba.add_argument("-y", "--yes", action="store_true", help="Skip confirmation.")
+    pba.set_defaults(func=_block_profile_apps)
 
     px = sub.add_parser(
         "delete",
