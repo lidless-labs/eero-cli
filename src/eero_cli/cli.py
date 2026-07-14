@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import os
 import re
 import sys
-from datetime import datetime, timedelta, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from eero.client import EeroClient
 from eero.exceptions import (
@@ -30,7 +32,7 @@ def _compile_pattern(pattern: str) -> re.Pattern[str]:
     try:
         return re.compile(pattern, re.IGNORECASE)
     except re.error as e:
-        raise SystemExit(f"invalid regex {pattern!r}: {e}")
+        raise SystemExit(f"invalid regex {pattern!r}: {e}") from e
 
 
 def _ensure_session_dir(path: Path) -> None:
@@ -140,8 +142,8 @@ def _fmt_last_active(value: Any) -> str:
     else:
         return str(value)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    delta = datetime.now(timezone.utc) - dt
+        dt = dt.replace(tzinfo=UTC)
+    delta = datetime.now(UTC) - dt
     secs = int(delta.total_seconds())
     if secs < 60:
         return f"{secs}s ago"
@@ -307,7 +309,8 @@ def _print_profile_table(profiles: Iterable[dict[str, Any]]) -> None:
     print("-" * len(header))
     for p in rows:
         pid = str(p.get("id") or _profile_id_from_url(p.get("url", "")) or "?")
-        devices = p.get("devices") if isinstance(p.get("devices"), list) else []
+        raw_devices = p.get("devices")
+        devices = raw_devices if isinstance(raw_devices, list) else []
         print(f"{pid:<10} {len(devices):<7} {_profile_label(p)}")
     print(f"\n{len(rows)} profile(s)")
 
@@ -346,7 +349,7 @@ def _validate_time(value: str) -> str:
     try:
         datetime.strptime(value, "%H:%M")
     except ValueError:
-        raise SystemExit(f"invalid time {value!r}; use 24-hour HH:MM")
+        raise SystemExit(f"invalid time {value!r}; use 24-hour HH:MM") from None
     return value
 
 
@@ -705,7 +708,7 @@ async def _block_profile_apps(args: argparse.Namespace) -> int:
         profile_id = str(profile.get("id") or _profile_id_from_url(profile.get("url", "")))
         current_resp = await client.get_blocked_applications(profile_id=profile_id, network_id=nid)
         data = current_resp.get("data", {}) if isinstance(current_resp, dict) else {}
-        current = []
+        current: list[Any] = []
         if isinstance(data, dict):
             current = data.get("blocked_applications") or data.get("premium_dns", {}).get("blocked_applications") or []
         current = [str(a).lower() for a in current] if isinstance(current, list) else []
@@ -768,16 +771,12 @@ async def _auth(args: argparse.Namespace) -> int:
                 await client._api.auth._save_credentials()
                 print(f"\nPartial state saved to {args.session_path}.")
                 print("When the SMS arrives (within 30 min), finish with:")
-                print(f"  eero auth --code <CODE>")
-                try:
+                print("  eero auth --code <CODE>")
+                with contextlib.suppress(OSError):
                     os.chmod(args.session_path, 0o600)
-                except OSError:
-                    pass
                 return 0
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(args.session_path, 0o600)
-        except OSError:
-            pass
         networks_resp = await client.get_networks()
         nets = _extract_networks(networks_resp)
         print(f"Authenticated. Session written to {args.session_path}")
@@ -873,7 +872,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     px = sub.add_parser(
         "delete",
-        help="(EXPERIMENTAL) Try the DELETE endpoint. Eero's REST API does not actually expose device deletion; this returns 404 on consumer accounts. Kept for API research.",
+        help="(EXPERIMENTAL) Try the DELETE endpoint. Eero's REST API does not actually expose "
+        "device deletion; this returns 404 on consumer accounts. Kept for API research.",
     )
     px.add_argument("device", help="Device ID (last URL segment) or MAC address.")
     px.add_argument("--force", action="store_true", help="Try the DELETE even if eero says online.")
@@ -896,7 +896,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     pc = sub.add_parser(
         "cleanup",
-        help="(EXPERIMENTAL) Tries DELETE for each match. Same caveat as `delete` — does not actually work against eero's public REST API.",
+        help="(EXPERIMENTAL) Tries DELETE for each match. Same caveat as `delete`: does not "
+        "actually work against eero's public REST API.",
     )
     pc.add_argument("pattern", help="Regex matched against nickname/hostname, e.g. '^s3-'")
     pc.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt.")

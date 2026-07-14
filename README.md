@@ -110,6 +110,20 @@ The mobile app's "Forget Device" button must use either a private/internal chann
 1. Open the eero mobile app, tap the device, three dots → "Forget Device". Eero auto-culls truly stale entries after ~30 days, so doing nothing also works.
 2. Or capture the real call via mitmproxy on your phone (left as an exercise; PR welcome if you find it).
 
+## Development
+
+```bash
+pip install -e ".[dev]"   # pytest, ruff, mypy
+ruff check .              # lint
+mypy                     # type-check
+pytest                   # unit tests (pure parse/filter/format logic, no network)
+```
+
+The tests cover the response-shape extraction, the device/profile match resolution
+(including the "refuse to guess when ambiguous" safety path that guards destructive
+commands), day/time validation, and the argparse command surface. CI runs all three
+checks on every push and PR (`.github/workflows/ci.yml`).
+
 ## Underlying library
 
 [`eero-api`](https://github.com/fulviofreitas/eero-api) by Fulvio Freitas is a modern async client, version 4.1.3 at time of writing. Picked over the older `343max/eero-client` (last code push Feb 2024) because it's actively maintained, ships proper file-based credential storage, and has a clean async surface.
