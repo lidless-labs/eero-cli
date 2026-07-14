@@ -23,6 +23,13 @@ dependencies = [
     "eero-api>=4.1.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
 [project.urls]
 Homepage = "https://github.com/lidless-labs/eero-cli"
 Issues = "https://github.com/lidless-labs/eero-cli/issues"
@@ -32,3 +39,24 @@ eero = "eero_cli.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# B008: argparse `type=Path` defaults are fine. E501: line length handled above.
+ignore = ["B008"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
