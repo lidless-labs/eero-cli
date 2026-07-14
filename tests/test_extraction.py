@@ -8,7 +8,6 @@ every command. A regression here silently drops devices/networks from results.
 from __future__ import annotations
 
 from eero_cli.cli import (
-    _api_path,
     _device_id_from_url,
     _device_urls,
     _extract_data_list,
@@ -88,21 +87,6 @@ class TestIdFromUrl:
 
     def test_empty_string(self):
         assert _device_id_from_url("") == ""
-
-
-class TestApiPath:
-    def test_strips_leading_slash(self):
-        assert _api_path("/networks/1") == "networks/1"
-
-    def test_strips_version_prefix(self):
-        assert _api_path("/2.2/networks/1/profiles/7") == "networks/1/profiles/7"
-
-    def test_version_prefix_without_leading_slash(self):
-        assert _api_path("2.2/networks/1") == "networks/1"
-
-    def test_leaves_other_versions_alone(self):
-        # Only 2.2/ is stripped; a hypothetical 3.0/ passes through.
-        assert _api_path("/3.0/networks/1") == "3.0/networks/1"
 
 
 class TestDeviceUrls:
