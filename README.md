@@ -2,6 +2,9 @@
   <img src="docs/assets/eero-cli-social-preview.jpg" alt="eero-cli social preview" width="900">
 </p>
 
+<p align="center">
+  <a href="https://lidless.dev"><img src="docs/assets/marks/eero-cli-circle.png" width="48" alt="Lidless Labs"></a>
+</p>
 <h1 align="center">eero-cli</h1>
 
 <p align="center"><strong>Tiny terminal CLI for managing devices on an eero mesh network from a real shell.</strong></p>
@@ -138,3 +141,11 @@ checks on every push and PR (`.github/workflows/ci.yml`).
 ## License
 
 MIT. See [LICENSE](./LICENSE).
+
+---
+
+<p align="center"><a href="https://lidless.dev">Part of <strong>Lidless Labs</strong></a> &middot; the eye does not close</p>
+
+<p align="center"><sub><strong>Network:</strong> <a href="https://github.com/lidless-labs/librenmsctrl">librenmsctrl</a> &middot; <a href="https://github.com/lidless-labs/n8nctrl">n8nctrl</a> &middot; <a href="https://github.com/lidless-labs/watchtower">watchtower</a> &middot; <a href="https://github.com/lidless-labs/portgrid">portgrid</a> &middot; <a href="https://github.com/lidless-labs/cutsheet">cutsheet</a></sub></p>
+
+<p align="center"><sub><a href="https://lidless.dev">All tools</a> &middot; <a href="https://github.com/lidless-labs">Lidless Labs on GitHub</a></sub></p>
