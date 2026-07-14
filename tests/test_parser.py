@@ -62,6 +62,27 @@ class TestSubcommandWiring:
         assert args.applications == ["youtube", "tiktok"]
         assert args.append is True
 
+    def test_status_maps_to_handler(self):
+        args = parse(["status"])
+        assert args.func is cli._status
+        assert args.json is False
+
+    def test_status_json(self):
+        assert parse(["status", "--json"]).json is True
+
+    def test_rename_positional_args(self):
+        args = parse(["rename", "aa:bb:cc", "Living Room TV"])
+        assert args.func is cli._rename_device
+        assert args.device == "aa:bb:cc"
+        assert args.nickname == "Living Room TV"
+
+    def test_devices_json_flag(self):
+        assert parse(["devices", "--json"]).json is True
+        assert parse(["devices"]).json is False
+
+    def test_profiles_json_flag(self):
+        assert parse(["profiles", "--json", "--devices"]).json is True
+
 
 class TestGlobalOptions:
     def test_network_id_global(self):

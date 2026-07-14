@@ -22,8 +22,9 @@ Wraps [`eero-api`](https://github.com/fulviofreitas/eero-api) (the most actively
 
 - A two-step, **non-interactive** SMS auth flow that survives across separate shell invocations
 - Filtered device listing (regex + MAC prefix + online/offline)
-- Single and bulk device blocking
+- Single and bulk device blocking, plus device rename
 - Profile management: create profiles, assign devices, set bedtime schedules, block apps
+- `--json` output on the read commands for scripting, and a read-only `status` check
 - An honest writeup, in this README, of what eero's API will and won't let you do, so you do not spend half a day chasing unsupported calls
 
 ## Install
@@ -68,11 +69,17 @@ The underlying `eero-api` library auto-clears any persisted session whose `sessi
 ## Commands
 
 ```bash
+eero status                       # auth state, account, visible networks (read-only)
+eero status --json                # same, machine-readable (exit 1 if not signed in)
+
 eero devices                      # list everything
 eero devices --filter '^iphone'   # regex over nickname/hostname
 eero devices --mac 'BC:24:11'     # MAC prefix
 eero devices --offline            # only stale entries
 eero devices --online             # only currently connected
+eero devices --json               # JSON array instead of a table
+
+eero rename <mac-or-id> 'Office AP'  # set a device nickname
 
 eero block <mac-or-id>            # block a device (works on online devices)
 eero block <mac-or-id> --unblock  # reverse it

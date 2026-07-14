@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from eero_cli.cli import (
+    _account_summary,
     _compile_pattern,
     _device_label,
     _fmt_last_active,
@@ -100,6 +101,25 @@ class TestValidateTime:
     def test_garbage_exits(self):
         with pytest.raises(SystemExit):
             _validate_time("nope")
+
+
+class TestAccountSummary:
+    def test_plain_string_fields(self):
+        out = _account_summary({"name": "Sol", "email": "sol@example.com"})
+        assert out == {"name": "Sol", "email": "sol@example.com"}
+
+    def test_unwraps_value_dicts(self):
+        # eero wraps some fields as {"value": ...}
+        out = _account_summary({"email": {"value": "sol@example.com"}, "phone": {"value": "+15550001111"}})
+        assert out["email"] == "sol@example.com"
+        assert out["phone"] == "+15550001111"
+
+    def test_omits_missing_and_empty(self):
+        out = _account_summary({"name": "Sol", "email": "", "phone": None})
+        assert out == {"name": "Sol"}
+
+    def test_empty_input(self):
+        assert _account_summary({}) == {}
 
 
 class TestCompilePattern:
