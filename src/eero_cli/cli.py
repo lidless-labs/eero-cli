@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import json
 import os
 import re
 import sys
@@ -376,6 +377,29 @@ def _bedtime_block(days: list[str], start: str, end: str) -> dict[str, Any]:
     }
 
 
+def _dump_json(obj: Any) -> None:
+    print(json.dumps(obj, indent=2, default=str, sort_keys=True))
+
+
+def _account_summary(account_data: dict[str, Any]) -> dict[str, str]:
+    """Pull the human-relevant identity fields out of the /account response.
+
+    eero wraps some fields as ``{"value": ...}``; unwrap those. Missing fields
+    are omitted, so a script can treat key presence as 'known'.
+    """
+    def _val(v: Any) -> str | None:
+        if isinstance(v, dict):
+            v = v.get("value")
+        return str(v) if v else None
+
+    out: dict[str, str] = {}
+    for key in ("name", "email", "phone"):
+        val = _val(account_data.get(key))
+        if val:
+            out[key] = val
+    return out
+
+
 async def _list_devices(args: argparse.Namespace) -> int:
     async with _client(args) as client:
         nid = await _resolve_network_id(client, args.network_id)
@@ -391,7 +415,10 @@ async def _list_devices(args: argparse.Namespace) -> int:
             only_offline=args.offline,
             only_online=args.online,
         )
-        _print_device_table(filtered)
+        if args.json:
+            _dump_json(filtered)
+        else:
+            _print_device_table(filtered)
     return 0
 
 
@@ -550,6 +577,17 @@ async def _list_profiles(args: argparse.Namespace) -> int:
         profiles = _extract_data_list(resp, "profiles")
         if args.search:
             profiles = [p for p in profiles if _matches_terms(_profile_search_text(p), args.search)]
+        if args.json:
+            result = []
+            for p in profiles:
+                entry = dict(p)
+                if args.devices:
+                    pid = str(p.get("id") or _profile_id_from_url(p.get("url", "")))
+                    detail = await client.get_profile_devices(profile_id=pid, network_id=nid)
+                    entry["devices"] = _extract_data_list(detail, "devices")
+                result.append(entry)
+            _dump_json(result)
+            return 0
         _print_profile_table(profiles)
         if args.devices:
             for p in profiles:
@@ -558,6 +596,70 @@ async def _list_profiles(args: argparse.Namespace) -> int:
                 devices = _extract_data_list(detail, "devices")
                 print(f"\n{_profile_label(p)}:")
                 _print_device_table(devices)
+    return 0
+
+
+async def _status(args: argparse.Namespace) -> int:
+    """Report auth state, account identity, and visible networks. Read-only.
+
+    Exit 0 when authenticated, 1 when not, so scripts can gate on it.
+    """
+    async with _client(args) as client:
+        authed = client.is_authenticated
+        account: dict[str, str] = {}
+        networks: list[dict] = []
+        if authed:
+            with contextlib.suppress(EeroException):
+                acct = await client.get_account()
+                data = acct.get("data", {}) if isinstance(acct, dict) else {}
+                account = _account_summary(data if isinstance(data, dict) else {})
+            with contextlib.suppress(EeroException):
+                networks = _extract_networks(await client.get_networks())
+        if args.json:
+            _dump_json({
+                "authenticated": authed,
+                "session_path": str(args.session_path),
+                "account": account,
+                "networks": networks,
+            })
+            return 0 if authed else 1
+        print(f"{'authenticated:':<14}{authed}")
+        print(f"{'session:':<14}{args.session_path}")
+        for key in ("name", "email", "phone"):
+            if account.get(key):
+                print(f"{key + ':':<14}{account[key]}")
+        if authed:
+            print(f"{'networks:':<14}{len(networks)}")
+            for n in networks:
+                print(f"  - {n.get('name')} ({_network_id_of(n)})")
+        else:
+            print("(run `eero auth` to sign in)")
+    return 0 if authed else 1
+
+
+async def _rename_device(args: argparse.Namespace) -> int:
+    async with _client(args) as client:
+        nid = await _resolve_network_id(client, args.network_id, destructive=True)
+        devices = _extract_data_list(await client.get_devices(network_id=nid), "devices")
+        match = _find_one_device(devices, args.device)
+        if not match:
+            return 1
+        did = _device_id_from_url(match.get("url", ""))
+        if not did:
+            print(f"matched {_device_label(match)} but device has no URL/id; cannot rename", file=sys.stderr)
+            return 1
+        print(f"Will rename {_device_label(match)} ({match.get('mac')}) -> {args.nickname}")
+        if not args.yes:
+            reply = input("Proceed? [y/N] ").strip().lower()
+            if reply not in ("y", "yes"):
+                print("aborted")
+                return 0
+        try:
+            await client.set_device_nickname(device_id=did, nickname=args.nickname, network_id=nid)
+        except EeroAPIException as e:
+            print(f"eero refused: {e}", file=sys.stderr)
+            return 3
+        print(f"renamed {_device_label(match)} -> {args.nickname}")
     return 0
 
 
@@ -800,18 +902,30 @@ def _build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--code", help="Verification code (skip interactive prompt)")
     pa.set_defaults(func=_auth)
 
+    pst = sub.add_parser("status", help="Show auth state, account identity, and visible networks (read-only).")
+    pst.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
+    pst.set_defaults(func=_status)
+
     pd = sub.add_parser("devices", help="List devices on the network.")
     pd.add_argument("--filter", help="Regex matched against device name/host/manufacturer/MAC/IP/URL.")
     pd.add_argument("--search", help="Plain-text terms matched across device name/host/manufacturer/MAC/IP/URL.")
     pd.add_argument("--mac", help="MAC prefix filter, e.g. 'BC:24:11' or 'bc2411'.")
     pd.add_argument("--offline", action="store_true", help="Only offline devices.")
     pd.add_argument("--online", action="store_true", help="Only online devices.")
+    pd.add_argument("--json", action="store_true", help="Emit the device list as JSON instead of a table.")
     pd.set_defaults(func=_list_devices)
 
     pp = sub.add_parser("profiles", help="List profiles and optional profile devices.")
     pp.add_argument("--search", help="Plain-text terms matched against profile name/id/url.")
     pp.add_argument("--devices", action="store_true", help="Also list devices assigned to each matching profile.")
+    pp.add_argument("--json", action="store_true", help="Emit the profile list as JSON instead of a table.")
     pp.set_defaults(func=_list_profiles)
+
+    prn = sub.add_parser("rename", help="Set a device nickname.")
+    prn.add_argument("device", help="Device ID or MAC.")
+    prn.add_argument("nickname", help="New nickname to display in the eero app.")
+    prn.add_argument("-y", "--yes", action="store_true", help="Skip confirmation.")
+    prn.set_defaults(func=_rename_device)
 
     pc2 = sub.add_parser("profile-create", help="Create a new profile.")
     pc2.add_argument("name", help="Profile name.")
