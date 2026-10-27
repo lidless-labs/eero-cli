@@ -602,39 +602,55 @@ async def _list_profiles(args: argparse.Namespace) -> int:
 async def _status(args: argparse.Namespace) -> int:
     """Report auth state, account identity, and visible networks. Read-only.
 
-    Exit 0 when authenticated, 1 when not, so scripts can gate on it.
+    Exit 0 after remote validation, 1 for auth failure, 3 for client/API failure.
     """
-    async with _client(args) as client:
-        authed = client.is_authenticated
-        account: dict[str, str] = {}
-        networks: list[dict] = []
-        if authed:
-            with contextlib.suppress(EeroException):
-                acct = await client.get_account()
+    authed: bool | None = False
+    account: dict[str, str] = {}
+    networks: list[dict] = []
+    error: dict[str, str] | None = None
+    exit_code = 1
+    try:
+        async with _client(args) as client:
+            authed = client.is_authenticated
+            if authed:
+                acct = await client.get_account(refresh_cache=True)
                 data = acct.get("data", {}) if isinstance(acct, dict) else {}
                 account = _account_summary(data if isinstance(data, dict) else {})
-            with contextlib.suppress(EeroException):
-                networks = _extract_networks(await client.get_networks())
-        if args.json:
-            _dump_json({
-                "authenticated": authed,
-                "session_path": str(args.session_path),
-                "account": account,
-                "networks": networks,
-            })
-            return 0 if authed else 1
-        print(f"{'authenticated:':<14}{authed}")
-        print(f"{'session:':<14}{args.session_path}")
-        for key in ("name", "email", "phone"):
-            if account.get(key):
-                print(f"{key + ':':<14}{account[key]}")
-        if authed:
-            print(f"{'networks:':<14}{len(networks)}")
-            for n in networks:
-                print(f"  - {n.get('name')} ({_network_id_of(n)})")
-        else:
-            print("(run `eero auth` to sign in)")
-    return 0 if authed else 1
+                networks = _extract_networks(await client.get_networks(refresh_cache=True))
+                exit_code = 0
+    except EeroAuthenticationException as e:
+        authed = False
+        exit_code = 1
+        error = {"type": "authentication_failed", "message": f"auth error: {e}"}
+    except EeroException as e:
+        authed = None
+        exit_code = 3
+        error = {"type": "remote_validation_failed", "message": f"remote validation failed: {e}"}
+    if args.json:
+        result: dict[str, Any] = {
+            "authenticated": authed,
+            "session_path": str(args.session_path),
+            "account": account,
+            "networks": networks,
+        }
+        if error:
+            result["error"] = error
+        _dump_json(result)
+        return exit_code
+    print(f"{'authenticated:':<14}{'unknown' if authed is None else authed}")
+    print(f"{'session:':<14}{args.session_path}")
+    for key in ("name", "email", "phone"):
+        if account.get(key):
+            print(f"{key + ':':<14}{account[key]}")
+    if authed or networks:
+        print(f"{'networks:':<14}{len(networks)}")
+        for n in networks:
+            print(f"  - {n.get('name')} ({_network_id_of(n)})")
+    if error:
+        print(error["message"], file=sys.stderr)
+    if authed is False:
+        print("(run `eero auth` to sign in)")
+    return exit_code
 
 
 async def _rename_device(args: argparse.Namespace) -> int:
@@ -744,13 +760,19 @@ async def _schedule_profile(args: argparse.Namespace) -> int:
             return 1
         profile_id = str(profile.get("id") or _profile_id_from_url(profile.get("url", "")))
         block = _bedtime_block(days, start, end)
+        profile_data = await _get_profile_data(client, nid, profile_id)
+        existing = _count_schedules(profile_data)
+        print(f"Will replace {existing} existing schedule block(s) on {_profile_label(profile)}:")
+        if existing:
+            for scheduled_block in profile_data["schedule"]:
+                print(f"  - {json.dumps(scheduled_block, sort_keys=True)}")
+        print("The new single bedtime block replaces the entire schedule.")
         print(f"Will set bedtime block on {_profile_label(profile)}: {start}-{end} on {', '.join(days)}")
         if not args.yes:
             reply = input("Proceed? [y/N] ").strip().lower()
             if reply not in ("y", "yes"):
                 print("aborted")
                 return 0
-        existing = _count_schedules(await _get_profile_data(client, nid, profile_id))
         await client.set_profile_schedule(profile_id=profile_id, time_blocks=[block], network_id=nid)
         if existing:
             print(f"replaced {existing} existing schedule(s)")
