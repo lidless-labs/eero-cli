@@ -73,7 +73,7 @@ The underlying `eero-api` library auto-clears any persisted session whose `sessi
 
 ```bash
 eero status                       # auth state, account, visible networks (read-only)
-eero status --json                # same, machine-readable (exit 1 if not signed in)
+eero status --json                # same, machine-readable
 
 eero devices                      # list everything
 eero devices --filter '^iphone'   # regex over nickname/hostname
@@ -98,6 +98,14 @@ eero profile-block-apps Johnny youtube --append -y
 ```
 
 `block-cleanup` defaults to offline-only and skips already-blocked devices. Pass `--include-online` to widen the net.
+
+`status` validates a locally signed-in session with fresh account and network reads.
+It exits 0 on success (including accounts with no networks), 1 when signed out or
+authentication fails, and 3 when an API/client error prevents remote validation.
+In JSON mode, failures remain JSON. Remote failures add an `error` object with
+`type` and `message`: `authentication_failed` sets `authenticated` to `false`,
+while `remote_validation_failed` sets it to `null` because authentication could
+not be verified. Successfully retrieved account or network details are retained.
 
 Profile schedules are profile-level in eero, not per-device. To restrict a single
 device without affecting a profile's other devices, create a dedicated profile for
