@@ -111,6 +111,12 @@ Profile schedules are profile-level in eero, not per-device. To restrict a singl
 device without affecting a profile's other devices, create a dedicated profile for
 that device and assign only it.
 
+`profile-schedule` replaces the entire profile schedule with one bedtime block.
+Before confirmation, it reads and previews the existing block count and details,
+then shows the proposed days and times. Cancellation makes no changes. If the
+existing schedule cannot be read, the command stops before confirmation or any
+write. `--yes` skips input and still prints the replacement preview.
+
 ## What this CLI cannot do (and why)
 
 The eero REST and GraphQL APIs **do not expose any mutating operation on offline devices**. We verified this end-to-end:

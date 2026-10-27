@@ -760,13 +760,19 @@ async def _schedule_profile(args: argparse.Namespace) -> int:
             return 1
         profile_id = str(profile.get("id") or _profile_id_from_url(profile.get("url", "")))
         block = _bedtime_block(days, start, end)
+        profile_data = await _get_profile_data(client, nid, profile_id)
+        existing = _count_schedules(profile_data)
+        print(f"Will replace {existing} existing schedule block(s) on {_profile_label(profile)}:")
+        if existing:
+            for scheduled_block in profile_data["schedule"]:
+                print(f"  - {json.dumps(scheduled_block, sort_keys=True)}")
+        print("The new single bedtime block replaces the entire schedule.")
         print(f"Will set bedtime block on {_profile_label(profile)}: {start}-{end} on {', '.join(days)}")
         if not args.yes:
             reply = input("Proceed? [y/N] ").strip().lower()
             if reply not in ("y", "yes"):
                 print("aborted")
                 return 0
-        existing = _count_schedules(await _get_profile_data(client, nid, profile_id))
         await client.set_profile_schedule(profile_id=profile_id, time_blocks=[block], network_id=nid)
         if existing:
             print(f"replaced {existing} existing schedule(s)")
