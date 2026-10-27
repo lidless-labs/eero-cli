@@ -47,6 +47,8 @@ def test_status_local_logout_makes_no_requests(client, capsys, json_mode):
 def test_status_valid_session_including_zero_networks(client, capsys, json_mode, networks):
     client.get_networks.return_value = {"data": {"networks": networks}}
     assert cli.main(["status", *(["--json"] if json_mode else [])]) == 0
+    client.get_account.assert_awaited_once_with(refresh_cache=True)
+    client.get_networks.assert_awaited_once_with(refresh_cache=True)
     output = capsys.readouterr()
     if json_mode:
         result = json.loads(output.out)
