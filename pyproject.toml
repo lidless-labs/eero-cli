@@ -20,7 +20,7 @@ classifiers = [
     "Topic :: System :: Networking",
 ]
 dependencies = [
-    "eero-api>=4.1.0",
+    "eero-api>=4.1.0,<6",
 ]
 
 [project.optional-dependencies]

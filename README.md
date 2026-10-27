@@ -40,6 +40,9 @@ pipx install .
 
 Requires Python 3.12+ (inherited from `eero-api`).
 
+This CLI supports the `eero-api` 4.x and 5.x client interfaces. The dependency
+range excludes 6.x and newer until those interfaces have been migrated and tested.
+
 ## Quickstart
 
 ```bash
